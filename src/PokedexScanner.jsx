@@ -140,7 +140,7 @@ export default function PokedexScanner() {
   // ─── TCG API fetch ───
   const fetchCardData = useCallback(async (pokemonName, cardNumber = null) => {
     try {
-      let url = `https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(pokemonName)}"&orderBy=-tcgplayer.prices.holofoil.market&pageSize=10`;
+      const url = `https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(pokemonName)}"&orderBy=-tcgplayer.prices.holofoil.market&pageSize=10`;
       const res = await fetch(url);
       if (!res.ok) return null;
       const data = await res.json();
@@ -156,33 +156,48 @@ export default function PokedexScanner() {
       return {
         rarity: card.rarity || "Unknown",
         marketPrice: priceSource.market || priceSource.mid || null,
+        tcgplayerUrl: card.tcgplayer?.url || null,
+        setName: card.set?.name || null,
       };
     } catch { return null; }
   }, []);
 
-  // ─── Search ───
+  // ─── Search (cached pokemon list) ───
   const searchTimeout = useRef(null);
+  const pokemonListCache = useRef(null);
   const handleSearch = useCallback((q) => {
     setSearchQuery(q);
     if (q.length < 2) { setSuggestions([]); return; }
     clearTimeout(searchTimeout.current);
     searchTimeout.current = setTimeout(async () => {
       try {
-        const res = await fetch(`https://pokeapi.co/api/v2/pokemon?limit=1302`);
-        const data = await res.json();
+        if (!pokemonListCache.current) {
+          const res = await fetch(`https://pokeapi.co/api/v2/pokemon?limit=1302`);
+          const data = await res.json();
+          pokemonListCache.current = data.results;
+        }
         const norm = q.toLowerCase();
-        setSuggestions(data.results.filter(p => p.name.startsWith(norm) || p.name.includes(norm)).slice(0, 6).map(p => ({ name: p.name })));
+        setSuggestions(pokemonListCache.current.filter(p => p.name.startsWith(norm) || p.name.includes(norm)).slice(0, 6).map(p => ({ name: p.name })));
       } catch { setSuggestions([]); }
-    }, 300);
+    }, 200);
   }, []);
 
   const lookupPokemon = useCallback(async (name, cardNumber = null) => {
     setStage("scanning"); setError(""); setSuggestions([]); setCardData(null);
     try {
-      const entry = await fetchFromPokeAPI(name);
+      // Fire both API calls in parallel
+      const displayName = name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("-");
+      const [entry, tcgData] = await Promise.all([
+        fetchFromPokeAPI(name),
+        fetchCardData(displayName, cardNumber),
+      ]);
       if (entry) {
         setPokemon(entry); setStage("result"); speakPokedex(entry);
-        fetchCardData(entry.name, cardNumber).then(cd => { if (cd) setCardData(cd); });
+        if (tcgData) setCardData(tcgData);
+        // If TCG didn't match on display name, try the raw name
+        if (!tcgData) {
+          fetchCardData(entry.name, cardNumber).then(cd => { if (cd) setCardData(cd); });
+        }
       } else {
         setError(`Couldn't find "${name}" in the Pokédex.`); setStage("error");
       }
@@ -413,30 +428,45 @@ export default function PokedexScanner() {
                   }}>{pokemon.description}</div>
                   {/* Card Data */}
                   {cardData ? (
-                    <div style={{ marginTop:8, display:"flex", gap:8, animation:"fadeIn 0.4s ease" }}>
-                      <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                        <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Rarity</div>
-                        <div style={{
-                          fontSize:13, fontWeight:700,
-                          color: cardData.rarity.includes("Rare") ? "#FFD700" : cardData.rarity.includes("Uncommon") ? "#C0C0C0" : cardData.rarity === "Common" ? "#CD7F32" : "#aaa",
-                        }}>
-                          {cardData.rarity.includes("Illustration") ? "★★★ " + cardData.rarity
-                            : cardData.rarity === "Rare Holo" ? "★ Rare Holo"
-                            : cardData.rarity.includes("Ultra") || cardData.rarity.includes("EX") || cardData.rarity.includes("GX") || cardData.rarity.includes(" V") ? "★★ " + cardData.rarity
-                            : cardData.rarity.includes("VMAX") || cardData.rarity.includes("Secret") || cardData.rarity.includes("Rainbow") ? "★★★ " + cardData.rarity
-                            : cardData.rarity}
+                    <div style={{ marginTop:8, animation:"fadeIn 0.4s ease" }}>
+                      <div style={{ display:"flex", gap:8 }}>
+                        <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
+                          <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Rarity</div>
+                          <div style={{
+                            fontSize:13, fontWeight:700,
+                            color: cardData.rarity.includes("Rare") ? "#FFD700" : cardData.rarity.includes("Uncommon") ? "#C0C0C0" : cardData.rarity === "Common" ? "#CD7F32" : "#aaa",
+                          }}>
+                            {cardData.rarity.includes("Illustration") ? "★★★ " + cardData.rarity
+                              : cardData.rarity === "Rare Holo" ? "★ Rare Holo"
+                              : cardData.rarity.includes("Ultra") || cardData.rarity.includes("EX") || cardData.rarity.includes("GX") || cardData.rarity.includes(" V") ? "★★ " + cardData.rarity
+                              : cardData.rarity.includes("VMAX") || cardData.rarity.includes("Secret") || cardData.rarity.includes("Rainbow") ? "★★★ " + cardData.rarity
+                              : cardData.rarity}
+                          </div>
+                        </div>
+                        <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
+                          <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Market Value</div>
+                          <div style={{
+                            fontSize:13, fontWeight:700,
+                            color: cardData.marketPrice >= 50 ? "#FFD700" : cardData.marketPrice >= 10 ? "#66BB6A" : cardData.marketPrice ? "#aaa" : "#666",
+                          }}>
+                            {cardData.marketPrice ? `$${cardData.marketPrice.toFixed(2)}` : "N/A"}
+                          </div>
+                          <div style={{ fontSize:9, color:"#666", marginTop:1 }}>TCGplayer</div>
                         </div>
                       </div>
-                      <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                        <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Market Value</div>
-                        <div style={{
-                          fontSize:13, fontWeight:700,
-                          color: cardData.marketPrice >= 50 ? "#FFD700" : cardData.marketPrice >= 10 ? "#66BB6A" : cardData.marketPrice ? "#aaa" : "#666",
-                        }}>
-                          {cardData.marketPrice ? `$${cardData.marketPrice.toFixed(2)}` : "N/A"}
-                        </div>
-                        <div style={{ fontSize:9, color:"#666", marginTop:1 }}>TCGplayer</div>
-                      </div>
+                      {cardData.tcgplayerUrl && (
+                        <a href={cardData.tcgplayerUrl} target="_blank" rel="noopener noreferrer"
+                          style={{
+                            display:"block", marginTop:8, textAlign:"center",
+                            background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
+                            color:"#fff", padding:"8px 16px", borderRadius:8,
+                            fontSize:12, fontWeight:700, letterSpacing:0.5,
+                            textDecoration:"none",
+                            boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
+                          }}>
+                          View on TCGplayer →{cardData.setName ? ` (${cardData.setName})` : ""}
+                        </a>
+                      )}
                     </div>
                   ) : stage === "result" && (
                     <div style={{ marginTop:8, textAlign:"center", fontSize:10, color:"#555", fontStyle:"italic" }}>Loading card market data...</div>
