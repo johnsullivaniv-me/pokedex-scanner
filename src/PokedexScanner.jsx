@@ -75,6 +75,7 @@ export default function PokedexScanner() {
   const [suggestions, setSuggestions] = useState([]);
   const [cameraStream, setCameraStream] = useState(null);
   const [cardData, setCardData] = useState(null);
+  const [scanStep, setScanStep] = useState(null); // { phase, pokemonName, progress }
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -182,26 +183,32 @@ export default function PokedexScanner() {
     }, 200);
   }, []);
 
-  const lookupPokemon = useCallback(async (name, cardNumber = null) => {
+  const lookupPokemon = useCallback(async (name, cardNumber = null, fromScan = false) => {
     setStage("scanning"); setError(""); setSuggestions([]); setCardData(null);
+    if (!fromScan) setScanStep({ phase: "pokedex", pokemonName: name, progress: 50 });
     try {
-      // Fire both API calls in parallel
-      const displayName = name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("-");
-      const [entry, tcgData] = await Promise.all([
-        fetchFromPokeAPI(name),
-        fetchCardData(displayName, cardNumber),
-      ]);
+      setScanStep(prev => ({ ...prev, phase: "pokedex", progress: fromScan ? 50 : 60 }));
+      const entry = await fetchFromPokeAPI(name);
       if (entry) {
-        setPokemon(entry); setStage("result"); speakPokedex(entry);
-        if (tcgData) setCardData(tcgData);
-        // If TCG didn't match on display name, try the raw name
-        if (!tcgData) {
-          fetchCardData(entry.name, cardNumber).then(cd => { if (cd) setCardData(cd); });
-        }
+        setScanStep({ phase: "found", pokemonName: entry.name, progress: 80 });
+        setPokemon(entry);
+        // Brief pause to show the "found" animation
+        await new Promise(r => setTimeout(r, 600));
+        setScanStep({ phase: "market", pokemonName: entry.name, progress: 90 });
+        setStage("result"); speakPokedex(entry);
+        // TCG fetch after result is shown (non-blocking)
+        const displayName = name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("-");
+        fetchCardData(displayName, cardNumber).then(cd => {
+          if (cd) setCardData(cd);
+          else fetchCardData(entry.name, cardNumber).then(cd2 => { if (cd2) setCardData(cd2); });
+          setScanStep(null);
+        });
       } else {
+        setScanStep(null);
         setError(`Couldn't find "${name}" in the Pokédex.`); setStage("error");
       }
     } catch {
+      setScanStep(null);
       setError("Network error fetching Pokédex data."); setStage("error");
     }
   }, [fetchFromPokeAPI, speakPokedex, fetchCardData]);
@@ -227,21 +234,34 @@ export default function PokedexScanner() {
   // ─── Image → API → PokéAPI ───
   const identifyImage = useCallback(async (base64, mimeType) => {
     setStage("scanning");
+    setScanStep({ phase: "uploading", pokemonName: null, progress: 10 });
     try {
+      // Simulate progress during the API call
+      const progressTimer = setInterval(() => {
+        setScanStep(prev => prev && prev.phase === "identifying" ? { ...prev, progress: Math.min(prev.progress + 3, 45) } : prev);
+      }, 400);
+
+      setScanStep({ phase: "identifying", pokemonName: null, progress: 20 });
       const res = await fetch("/api/identify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ image: base64, mimeType })
       });
+      clearInterval(progressTimer);
       const data = await res.json();
+
       if (!data.name || data.name === "unknown") {
+        setScanStep(null);
         const debugMsg = data.debug ? ` (${data.debug})` : "";
         setError(`Couldn't identify a Pokémon in that image.${debugMsg} Try another angle or search by name.`);
         setStage("error");
         return;
       }
-      await lookupPokemon(data.name, data.cardNumber || null);
+      setScanStep({ phase: "identified", pokemonName: data.name, progress: 50 });
+      await new Promise(r => setTimeout(r, 800)); // Show the name reveal
+      await lookupPokemon(data.name, data.cardNumber || null, true);
     } catch (e) {
+      setScanStep(null);
       setError("Image scan failed: " + e.message); setStage("error");
     }
   }, [lookupPokemon]);
@@ -271,7 +291,7 @@ export default function PokedexScanner() {
 
   const reset = () => {
     window.speechSynthesis.cancel(); setSpeaking(false);
-    stopCamera(); setPokemon(null); setCardData(null); setError("");
+    stopCamera(); setPokemon(null); setCardData(null); setScanStep(null); setError("");
     setSearchQuery(""); setSuggestions([]); setStage("idle");
   };
 
@@ -292,6 +312,10 @@ export default function PokedexScanner() {
         }
         @keyframes waveBar { from{height:3px} to{height:14px} }
         @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+        @keyframes pokeBounce { 0%,100%{transform:translateY(0) rotate(0deg)} 25%{transform:translateY(-12px) rotate(-10deg)} 50%{transform:translateY(0) rotate(0deg)} 75%{transform:translateY(-6px) rotate(5deg)} }
+        @keyframes shimmer { 0%{background-position:-200px 0} 100%{background-position:200px 0} }
+        @keyframes nameReveal { from{opacity:0;transform:scale(0.5) translateY(10px);filter:blur(8px)} to{opacity:1;transform:scale(1) translateY(0);filter:blur(0)} }
+        @keyframes progressPulse { 0%,100%{opacity:0.8} 50%{opacity:1} }
       `}</style>
 
       <canvas ref={canvasRef} style={{ display: "none" }} />
@@ -384,11 +408,60 @@ export default function PokedexScanner() {
 
               {/* SCANNING */}
               {stage === "scanning" && (
-                <div style={{ textAlign:"center", padding:30, animation:"fadeIn 0.3s ease" }}>
-                  <div style={{ width:36,height:36,margin:"0 auto 12px", border:"3px solid #2a4a2a",borderTop:"3px solid transparent",
-                    borderRadius:"50%",animation:"spin 0.8s linear infinite" }} />
-                  <div style={{ fontSize:14,fontWeight:700,color:"#2a4a2a" }}>ANALYZING...</div>
-                  <div style={{ fontSize:11,color:"#4a6a4a",marginTop:4 }}>Looking up Pokédex entry</div>
+                <div style={{ textAlign:"center", padding:20, animation:"fadeIn 0.3s ease", width:"100%" }}>
+                  {/* Pokéball animation */}
+                  <div style={{ margin:"0 auto 16px", width:60, height:60, position:"relative", animation:"pokeBounce 1.2s ease-in-out infinite" }}>
+                    {/* Top half (red) */}
+                    <div style={{ position:"absolute", top:0, left:0, right:0, height:30, background:"#DC0A2D", borderRadius:"30px 30px 0 0", borderBottom:"3px solid #333" }} />
+                    {/* Bottom half (white) */}
+                    <div style={{ position:"absolute", bottom:0, left:0, right:0, height:27, background:"#fff", borderRadius:"0 0 30px 30px" }} />
+                    {/* Center button */}
+                    <div style={{ position:"absolute", top:"50%", left:"50%", transform:"translate(-50%,-50%)", width:18, height:18, borderRadius:"50%", background:"#fff", border:"3px solid #333", zIndex:2, boxShadow: scanStep?.phase === "identified" || scanStep?.phase === "found" ? "0 0 12px rgba(68,255,102,0.8)" : "none", transition:"box-shadow 0.3s" }} />
+                    {/* Outer ring */}
+                    <div style={{ position:"absolute", inset:0, borderRadius:"50%", border:"3px solid #333" }} />
+                  </div>
+
+                  {/* Status text */}
+                  <div style={{ fontSize:14, fontWeight:700, color:"#2a4a2a", marginBottom:4 }}>
+                    {scanStep?.phase === "uploading" && "UPLOADING IMAGE..."}
+                    {scanStep?.phase === "identifying" && "SCANNING CARD..."}
+                    {scanStep?.phase === "identified" && "POKÉMON FOUND!"}
+                    {scanStep?.phase === "pokedex" && "LOADING POKÉDEX..."}
+                    {scanStep?.phase === "found" && "MATCH CONFIRMED!"}
+                    {(!scanStep || scanStep.phase === "market") && "ANALYZING..."}
+                  </div>
+
+                  {/* Pokémon name reveal */}
+                  {scanStep?.pokemonName && (scanStep.phase === "identified" || scanStep.phase === "found" || scanStep.phase === "pokedex") && (
+                    <div style={{
+                      fontSize:22, fontWeight:800, color:"#2a4a2a", marginTop:4, marginBottom:8,
+                      textTransform:"capitalize", animation:"nameReveal 0.5s ease-out",
+                      textShadow:"0 1px 2px rgba(0,0,0,0.1)",
+                    }}>
+                      {scanStep.pokemonName.replace(/-/g, " ")}
+                    </div>
+                  )}
+
+                  {/* Sub-status */}
+                  <div style={{ fontSize:11, color:"#4a6a4a", marginBottom:12 }}>
+                    {scanStep?.phase === "uploading" && "Sending to analyzer..."}
+                    {scanStep?.phase === "identifying" && "Claude is examining the card..."}
+                    {scanStep?.phase === "identified" && "Accessing Pokédex database..."}
+                    {scanStep?.phase === "pokedex" && "Retrieving entry data..."}
+                    {scanStep?.phase === "found" && "Compiling Pokédex entry..."}
+                    {(!scanStep || scanStep.phase === "market") && "Looking up Pokédex entry..."}
+                  </div>
+
+                  {/* Progress bar */}
+                  <div style={{ maxWidth:220, margin:"0 auto", height:6, background:"rgba(0,0,0,0.15)", borderRadius:3, overflow:"hidden" }}>
+                    <div style={{
+                      height:"100%", borderRadius:3,
+                      background:"linear-gradient(90deg, #44CC66, #22AA44)",
+                      width: `${scanStep?.progress || 10}%`,
+                      transition:"width 0.4s ease-out",
+                      animation:"progressPulse 1.5s ease-in-out infinite",
+                    }} />
+                  </div>
                 </div>
               )}
 
