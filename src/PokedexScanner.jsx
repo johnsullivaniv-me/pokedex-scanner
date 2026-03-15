@@ -76,6 +76,7 @@ export default function PokedexScanner() {
   const [cameraStream, setCameraStream] = useState(null);
   const [cardData, setCardData] = useState(null);
   const [scanStep, setScanStep] = useState(null); // { phase, pokemonName, progress }
+  const [audioOn, setAudioOn] = useState(true);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -87,25 +88,37 @@ export default function PokedexScanner() {
     };
   }, [cameraStream]);
 
-  // ─── Voice ───
-  const getRoboticVoice = useCallback(() => {
+  // ─── Voice (anime Pokédex style - clear, female, clinical) ───
+  const getPokedexVoice = useCallback(() => {
     const voices = window.speechSynthesis.getVoices();
-    const preferred = ["Google UK English Male","Microsoft David","Microsoft Mark","Daniel","Alex","Google US English"];
+    // The anime Pokédex uses a female voice — clear, precise, slightly synthetic
+    const preferred = [
+      "Google UK English Female", "Google US English", "Samantha", "Karen",
+      "Moira", "Tessa", "Microsoft Zira", "Microsoft Hazel",
+      "Google UK English Male", "Microsoft David", "Daniel",
+    ];
     for (const name of preferred) {
       const v = voices.find(voice => voice.name.includes(name));
       if (v) return v;
     }
-    return voices.find(v => v.lang.startsWith("en")) || voices[0] || null;
+    return voices.find(v => v.lang.startsWith("en") && v.name.toLowerCase().includes("female"))
+      || voices.find(v => v.lang.startsWith("en"))
+      || voices[0] || null;
   }, []);
 
   const speakPokedex = useCallback((entry) => {
+    if (!audioOn) return;
     window.speechSynthesis.cancel();
     const doSpeak = () => {
-      const text = `${entry.name}. Number ${entry.dexNumber}. ${entry.genus}. Type: ${entry.types.join(" and ")}. ${entry.description}`;
+      // Anime-style delivery: name first, then type, then description — clipped and factual
+      const text = `${entry.name}. The ${entry.genus}. Type: ${entry.types.join(" and ")}. ${entry.description}`;
       const u = new SpeechSynthesisUtterance(text);
-      const voice = getRoboticVoice();
+      const voice = getPokedexVoice();
       if (voice) u.voice = voice;
-      u.rate = 0.95; u.pitch = 0.75; u.volume = 1;
+      // Anime Pokédex: slightly fast, higher pitch, very precise
+      u.rate = 1.08;
+      u.pitch = 1.15;
+      u.volume = 1;
       u.onstart = () => setSpeaking(true);
       u.onend = () => setSpeaking(false);
       u.onerror = () => setSpeaking(false);
@@ -114,7 +127,7 @@ export default function PokedexScanner() {
     if (window.speechSynthesis.getVoices().length === 0) {
       window.speechSynthesis.onvoiceschanged = doSpeak;
     } else { doSpeak(); }
-  }, [getRoboticVoice]);
+  }, [getPokedexVoice, audioOn]);
 
   // ─── PokéAPI fetch ───
   const fetchFromPokeAPI = useCallback(async (name) => {
@@ -139,19 +152,46 @@ export default function PokedexScanner() {
   }, []);
 
   // ─── TCG API fetch ───
-  const fetchCardData = useCallback(async (pokemonName, cardNumber = null) => {
+  const fetchCardData = useCallback(async (pokemonName, cardNumber = null, setCode = null) => {
     try {
-      const url = `https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(pokemonName)}"&orderBy=-tcgplayer.prices.holofoil.market&pageSize=10`;
-      const res = await fetch(url);
-      if (!res.ok) return null;
-      const data = await res.json();
-      if (!data.data || data.data.length === 0) return null;
+      // Build the most specific query possible
+      let query = `name:"${pokemonName}"`;
+      if (cardNumber) {
+        const num = cardNumber.split("/")[0];
+        query += ` number:"${num}"`;
+      }
+      if (setCode) {
+        // Try matching set code/name
+        query += ` (set.id:"${setCode.toLowerCase()}" OR set.name:"${setCode}")`;
+      }
+
+      let res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}&pageSize=5`);
+      let data = res.ok ? await res.json() : null;
+
+      // If specific query found nothing, fall back to just name + number
+      if (!data?.data?.length && (setCode || cardNumber)) {
+        let fallbackQuery = `name:"${pokemonName}"`;
+        if (cardNumber) fallbackQuery += ` number:"${cardNumber.split("/")[0]}"`;
+        res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(fallbackQuery)}&pageSize=10`);
+        data = res.ok ? await res.json() : null;
+      }
+
+      // Last resort: just name
+      if (!data?.data?.length) {
+        res = await fetch(`https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(pokemonName)}"&orderBy=-tcgplayer.prices.holofoil.market&pageSize=5`);
+        data = res.ok ? await res.json() : null;
+      }
+
+      if (!data?.data?.length) return null;
+
+      // Pick best match — prefer exact card number match
       let card = data.data[0];
       if (cardNumber) {
         const exactNum = cardNumber.split("/")[0];
         const exact = data.data.find(c => c.number === exactNum);
         if (exact) card = exact;
       }
+
       const prices = card.tcgplayer?.prices || {};
       const priceSource = prices.holofoil || prices["1stEditionHolofoil"] || prices.reverseHolofoil || prices.normal || prices["1stEditionNormal"] || {};
       return {
@@ -159,6 +199,7 @@ export default function PokedexScanner() {
         marketPrice: priceSource.market || priceSource.mid || null,
         tcgplayerUrl: card.tcgplayer?.url || null,
         setName: card.set?.name || null,
+        cardNumber: card.number ? `${card.number}/${card.set?.printedTotal || "?"}` : null,
       };
     } catch { return null; }
   }, []);
@@ -183,7 +224,7 @@ export default function PokedexScanner() {
     }, 200);
   }, []);
 
-  const lookupPokemon = useCallback(async (name, cardNumber = null, fromScan = false) => {
+  const lookupPokemon = useCallback(async (name, cardNumber = null, fromScan = false, setCode = null) => {
     setStage("scanning"); setError(""); setSuggestions([]); setCardData(null);
     if (!fromScan) setScanStep({ phase: "pokedex", pokemonName: name, progress: 50 });
     try {
@@ -192,15 +233,13 @@ export default function PokedexScanner() {
       if (entry) {
         setScanStep({ phase: "found", pokemonName: entry.name, progress: 80 });
         setPokemon(entry);
-        // Brief pause to show the "found" animation
         await new Promise(r => setTimeout(r, 600));
         setScanStep({ phase: "market", pokemonName: entry.name, progress: 90 });
         setStage("result"); speakPokedex(entry);
-        // TCG fetch after result is shown (non-blocking)
         const displayName = name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("-");
-        fetchCardData(displayName, cardNumber).then(cd => {
+        fetchCardData(displayName, cardNumber, setCode).then(cd => {
           if (cd) setCardData(cd);
-          else fetchCardData(entry.name, cardNumber).then(cd2 => { if (cd2) setCardData(cd2); });
+          else fetchCardData(entry.name, cardNumber, setCode).then(cd2 => { if (cd2) setCardData(cd2); });
           setScanStep(null);
         });
       } else {
@@ -258,8 +297,8 @@ export default function PokedexScanner() {
         return;
       }
       setScanStep({ phase: "identified", pokemonName: data.name, progress: 50 });
-      await new Promise(r => setTimeout(r, 800)); // Show the name reveal
-      await lookupPokemon(data.name, data.cardNumber || null, true);
+      await new Promise(r => setTimeout(r, 800));
+      await lookupPokemon(data.name, data.cardNumber || null, true, data.setCode || null);
     } catch (e) {
       setScanStep(null);
       setError("Image scan failed: " + e.message); setStage("error");
@@ -339,6 +378,34 @@ export default function PokedexScanner() {
             <LEDLight color="#FF4444" size={10} glow={stage==="error"} pulse={stage==="error"} />
             <LEDLight color="#FFDD44" size={10} glow={stage==="scanning"} pulse={stage==="scanning"} />
             <LEDLight color="#44FF66" size={10} glow={stage==="result"} />
+          </div>
+          {/* Audio toggle */}
+          <div
+            onClick={() => { setAudioOn(prev => !prev); if (speaking) { window.speechSynthesis.cancel(); setSpeaking(false); } }}
+            style={{
+              marginLeft: "auto", cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+              background: audioOn ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.4)",
+              borderRadius: 16, padding: "5px 10px",
+              border: `1px solid ${audioOn ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.1)"}`,
+              transition: "all 0.2s ease",
+            }}
+          >
+            <div style={{ fontSize: 14 }}>{audioOn ? "🔊" : "🔇"}</div>
+            {/* Slider track */}
+            <div style={{
+              width: 28, height: 14, borderRadius: 7,
+              background: audioOn ? "#44CC66" : "#555",
+              position: "relative", transition: "background 0.2s ease",
+            }}>
+              {/* Slider knob */}
+              <div style={{
+                width: 10, height: 10, borderRadius: "50%",
+                background: "#fff", position: "absolute", top: 2,
+                left: audioOn ? 16 : 2,
+                transition: "left 0.2s ease",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+              }} />
+            </div>
           </div>
         </div>
 
@@ -423,12 +490,12 @@ export default function PokedexScanner() {
 
                   {/* Status text */}
                   <div style={{ fontSize:14, fontWeight:700, color:"#2a4a2a", marginBottom:4 }}>
-                    {scanStep?.phase === "uploading" && "UPLOADING IMAGE..."}
-                    {scanStep?.phase === "identifying" && "SCANNING CARD..."}
-                    {scanStep?.phase === "identified" && "POKÉMON FOUND!"}
-                    {scanStep?.phase === "pokedex" && "LOADING POKÉDEX..."}
-                    {scanStep?.phase === "found" && "MATCH CONFIRMED!"}
-                    {(!scanStep || scanStep.phase === "market") && "ANALYZING..."}
+                    {scanStep?.phase === "uploading" && "INITIALIZING POKÉDEX..."}
+                    {scanStep?.phase === "identifying" && "SCANNING POKÉMON DATA..."}
+                    {scanStep?.phase === "identified" && "POKÉMON IDENTIFIED!"}
+                    {scanStep?.phase === "pokedex" && "RETRIEVING POKÉDEX ENTRY..."}
+                    {scanStep?.phase === "found" && "DATA DOWNLOAD COMPLETE!"}
+                    {(!scanStep || scanStep.phase === "market") && "PROCESSING..."}
                   </div>
 
                   {/* Pokémon name reveal */}
@@ -444,12 +511,12 @@ export default function PokedexScanner() {
 
                   {/* Sub-status */}
                   <div style={{ fontSize:11, color:"#4a6a4a", marginBottom:12 }}>
-                    {scanStep?.phase === "uploading" && "Sending to analyzer..."}
-                    {scanStep?.phase === "identifying" && "Claude is examining the card..."}
-                    {scanStep?.phase === "identified" && "Accessing Pokédex database..."}
-                    {scanStep?.phase === "pokedex" && "Retrieving entry data..."}
-                    {scanStep?.phase === "found" && "Compiling Pokédex entry..."}
-                    {(!scanStep || scanStep.phase === "market") && "Looking up Pokédex entry..."}
+                    {scanStep?.phase === "uploading" && "Calibrating optical sensors..."}
+                    {scanStep?.phase === "identifying" && "Cross-referencing with known species..."}
+                    {scanStep?.phase === "identified" && "Querying Professor Oak's database..."}
+                    {scanStep?.phase === "pokedex" && "Downloading field research notes..."}
+                    {scanStep?.phase === "found" && "Compiling habitat and type data..."}
+                    {(!scanStep || scanStep.phase === "market") && "Searching Pokédex records..."}
                   </div>
 
                   {/* Progress bar */}
@@ -546,11 +613,13 @@ export default function PokedexScanner() {
                   )}
                   {/* Speaker */}
                   <div style={{ marginTop:10,minHeight:20,display:"flex",justifyContent:"center" }}>
-                    {speaking ? <SpeakingWaveform /> : (
+                    {speaking ? <SpeakingWaveform /> : audioOn ? (
                       <button onClick={() => speakPokedex(pokemon)} style={{
                         background:"none",border:"1px solid #00BFFF44",color:"#00BFFF",borderRadius:12,
                         padding:"4px 12px",fontSize:11,cursor:"pointer",fontWeight:600,letterSpacing:0.5,
                       }}>🔊 Replay Entry</button>
+                    ) : (
+                      <div style={{ fontSize:10, color:"#555", fontStyle:"italic" }}>Audio off — toggle on device to enable</div>
                     )}
                   </div>
                 </div>

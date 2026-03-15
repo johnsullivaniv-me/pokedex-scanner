@@ -59,15 +59,20 @@ export default async function handler(req) {
             },
             {
               type: 'text',
-              text: `Identify the Pokémon in this image. If it's a Pokémon card, also find the card number (usually printed at the bottom, like "4/102" or "025/198").
+              text: `You are analyzing a Pokémon card image. Extract the following information by reading the card carefully:
+
+1. The Pokémon's name (printed at the top of the card)
+2. The card number (printed at the bottom, like "4/102" or "025/198" or "SWSH039")  
+3. The set name or set code (often printed near the card number or bottom of the card, like "Evolving Skies", "Base Set", "SV", "SWSH", etc.)
 
 Respond in EXACTLY this JSON format, nothing else:
-{"name": "pikachu", "cardNumber": "58/102"}
+{"name": "pikachu", "cardNumber": "58/102", "setCode": "base1"}
 
 Rules:
 - name: English name, lowercase, PokéAPI format (hyphens for spaces). Examples: "pikachu", "charizard", "mr-mime"
-- cardNumber: the set number on the card like "4/102". If not visible or not a card, use null
-- If you cannot identify any Pokémon, respond: {"name": "unknown", "cardNumber": null}`,
+- cardNumber: EXACTLY as printed on the card. Include the full number like "4/102". If not visible, use null
+- setCode: The set abbreviation or name if you can read it. Common examples: "base1", "swsh", "sv", "xy", "sm", "evolving skies", "obsidian flames". If not visible, use null
+- If you cannot identify any Pokémon, respond: {"name": "unknown", "cardNumber": null, "setCode": null}`,
             },
           ],
         }],
@@ -90,7 +95,7 @@ Rules:
       parsed = { name, cardNumber: null };
     }
 
-    return Response.json({ name: parsed.name || 'unknown', cardNumber: parsed.cardNumber || null });
+    return Response.json({ name: parsed.name || 'unknown', cardNumber: parsed.cardNumber || null, setCode: parsed.setCode || null });
   } catch (error) {
     return Response.json({ name: 'unknown', debug: 'Fetch error: ' + error.message });
   }
