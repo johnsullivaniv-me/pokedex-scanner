@@ -77,6 +77,7 @@ export default function PokedexScanner() {
   const [cardData, setCardData] = useState(null);
   const [scanStep, setScanStep] = useState(null); // { phase, pokemonName, progress }
   const [audioOn, setAudioOn] = useState(true);
+  const [resultTab, setResultTab] = useState("pokedex"); // "pokedex" | "card"
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -331,7 +332,7 @@ export default function PokedexScanner() {
   const reset = () => {
     window.speechSynthesis.cancel(); setSpeaking(false);
     stopCamera(); setPokemon(null); setCardData(null); setScanStep(null); setError("");
-    setSearchQuery(""); setSuggestions([]); setStage("idle");
+    setSearchQuery(""); setSuggestions([]); setResultTab("pokedex"); setStage("idle");
   };
 
   return (
@@ -355,6 +356,9 @@ export default function PokedexScanner() {
         @keyframes shimmer { 0%{background-position:-200px 0} 100%{background-position:200px 0} }
         @keyframes nameReveal { from{opacity:0;transform:scale(0.5) translateY(10px);filter:blur(8px)} to{opacity:1;transform:scale(1) translateY(0);filter:blur(0)} }
         @keyframes progressPulse { 0%,100%{opacity:0.8} 50%{opacity:1} }
+        @keyframes slideInRight { from{opacity:0;transform:translateX(30px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes slideInLeft { from{opacity:0;transform:translateX(-30px)} to{opacity:1;transform:translateX(0)} }
+        @keyframes cardSpin { 0%{transform:rotateY(0deg)} 50%{transform:rotateY(180deg)} 100%{transform:rotateY(360deg)} }
       `}</style>
 
       <canvas ref={canvasRef} style={{ display: "none" }} />
@@ -534,94 +538,175 @@ export default function PokedexScanner() {
 
               {/* RESULT */}
               {stage === "result" && pokemon && (
-                <div style={{ width:"100%", padding:16, animation:"fadeIn 0.5s ease", color:"#e0e0e0" }}>
-                  {/* Sprite */}
-                  <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}>
-                    <div style={{
-                      width:120, height:120, borderRadius:"50%",
-                      background:`radial-gradient(circle, ${typeColors[pokemon.types[0]]||"#888"}33 0%, ${typeColors[pokemon.types[0]]||"#888"}11 60%, transparent 70%)`,
-                      display:"flex", alignItems:"center", justifyContent:"center",
+                <div style={{ width:"100%", color:"#e0e0e0", overflow:"hidden" }}>
+                  {/* Tab switcher */}
+                  <div style={{ display:"flex", borderBottom:"1px solid rgba(255,255,255,0.1)" }}>
+                    <button onClick={() => setResultTab("pokedex")} style={{
+                      flex:1, padding:"10px 0", fontSize:12, fontWeight:700, letterSpacing:1,
+                      background: resultTab==="pokedex" ? "rgba(255,255,255,0.08)" : "transparent",
+                      color: resultTab==="pokedex" ? "#fff" : "#666",
+                      border:"none", cursor:"pointer", textTransform:"uppercase",
+                      borderBottom: resultTab==="pokedex" ? "2px solid #00BFFF" : "2px solid transparent",
+                      transition:"all 0.2s",
+                    }}>📖 Pokédex</button>
+                    <button onClick={() => setResultTab("card")} style={{
+                      flex:1, padding:"10px 0", fontSize:12, fontWeight:700, letterSpacing:1,
+                      background: resultTab==="card" ? "rgba(255,255,255,0.08)" : "transparent",
+                      color: resultTab==="card" ? "#fff" : "#666",
+                      border:"none", cursor:"pointer", textTransform:"uppercase",
+                      borderBottom: resultTab==="card" ? "2px solid #FFD700" : "2px solid transparent",
+                      transition:"all 0.2s",
+                      position:"relative",
                     }}>
-                      {pokemon.sprite && (
-                        <img src={pokemon.sprite} alt={pokemon.name} style={{
-                          width:110, height:110, objectFit:"contain",
-                          filter:"drop-shadow(0 6px 12px rgba(0,0,0,0.5))",
-                          animation:"spriteFloat 3s ease-in-out infinite",
-                        }} />
-                      )}
-                    </div>
+                      💰 Card Info
+                      {!cardData && <span style={{ position:"absolute", top:6, right:"15%", width:6, height:6, borderRadius:"50%", background:"#FFDD44", animation:"pokedexPulse 1.5s infinite" }} />}
+                    </button>
                   </div>
-                  {/* Info */}
-                  <div style={{ textAlign:"center", marginBottom:10 }}>
-                    <div style={{ fontSize:11,color:"#888",fontWeight:600,letterSpacing:1 }}>#{String(pokemon.dexNumber).padStart(3,"0")}</div>
-                    <div style={{ fontSize:24,fontWeight:800,color:"#fff",marginBottom:2,textTransform:"capitalize" }}>{pokemon.name.replace(/-/g," ")}</div>
-                    {pokemon.genus && <div style={{ fontSize:12,color:"#aaa",fontStyle:"italic",marginBottom:8 }}>{pokemon.genus}</div>}
-                    <div style={{ display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center" }}>
-                      {pokemon.types.map(t => <TypeBadge key={t} type={t} />)}
-                    </div>
-                  </div>
-                  {/* Description */}
-                  <div style={{
-                    background:"rgba(255,255,255,0.07)", borderRadius:8,
-                    padding:"10px 12px", fontSize:13, lineHeight:1.6, color:"#ccc",
-                    borderLeft:`3px solid ${typeColors[pokemon.types[0]]||"#888"}`,
-                  }}>{pokemon.description}</div>
-                  {/* Card Data */}
-                  {cardData ? (
-                    <div style={{ marginTop:8, animation:"fadeIn 0.4s ease" }}>
-                      <div style={{ display:"flex", gap:8 }}>
-                        <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                          <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Rarity</div>
-                          <div style={{
-                            fontSize:13, fontWeight:700,
-                            color: cardData.rarity.includes("Rare") ? "#FFD700" : cardData.rarity.includes("Uncommon") ? "#C0C0C0" : cardData.rarity === "Common" ? "#CD7F32" : "#aaa",
-                          }}>
-                            {cardData.rarity.includes("Illustration") ? "★★★ " + cardData.rarity
-                              : cardData.rarity === "Rare Holo" ? "★ Rare Holo"
-                              : cardData.rarity.includes("Ultra") || cardData.rarity.includes("EX") || cardData.rarity.includes("GX") || cardData.rarity.includes(" V") ? "★★ " + cardData.rarity
-                              : cardData.rarity.includes("VMAX") || cardData.rarity.includes("Secret") || cardData.rarity.includes("Rainbow") ? "★★★ " + cardData.rarity
-                              : cardData.rarity}
-                          </div>
-                        </div>
-                        <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"8px 10px", textAlign:"center" }}>
-                          <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:3, textTransform:"uppercase" }}>Market Value</div>
-                          <div style={{
-                            fontSize:13, fontWeight:700,
-                            color: cardData.marketPrice >= 50 ? "#FFD700" : cardData.marketPrice >= 10 ? "#66BB6A" : cardData.marketPrice ? "#aaa" : "#666",
-                          }}>
-                            {cardData.marketPrice ? `$${cardData.marketPrice.toFixed(2)}` : "N/A"}
-                          </div>
-                          <div style={{ fontSize:9, color:"#666", marginTop:1 }}>TCGplayer</div>
+
+                  {/* POKÉDEX TAB */}
+                  {resultTab === "pokedex" && (
+                    <div style={{ padding:16, animation:"slideInLeft 0.3s ease" }}>
+                      {/* Sprite */}
+                      <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}>
+                        <div style={{
+                          width:120, height:120, borderRadius:"50%",
+                          background:`radial-gradient(circle, ${typeColors[pokemon.types[0]]||"#888"}33 0%, ${typeColors[pokemon.types[0]]||"#888"}11 60%, transparent 70%)`,
+                          display:"flex", alignItems:"center", justifyContent:"center",
+                        }}>
+                          {pokemon.sprite && (
+                            <img src={pokemon.sprite} alt={pokemon.name} style={{
+                              width:110, height:110, objectFit:"contain",
+                              filter:"drop-shadow(0 6px 12px rgba(0,0,0,0.5))",
+                              animation:"spriteFloat 3s ease-in-out infinite",
+                            }} />
+                          )}
                         </div>
                       </div>
-                      {cardData.tcgplayerUrl && (
-                        <a href={cardData.tcgplayerUrl} target="_blank" rel="noopener noreferrer"
-                          style={{
-                            display:"block", marginTop:8, textAlign:"center",
-                            background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
-                            color:"#fff", padding:"8px 16px", borderRadius:8,
-                            fontSize:12, fontWeight:700, letterSpacing:0.5,
-                            textDecoration:"none",
-                            boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
-                          }}>
-                          View on TCGplayer →{cardData.setName ? ` (${cardData.setName})` : ""}
-                        </a>
-                      )}
+                      {/* Info */}
+                      <div style={{ textAlign:"center", marginBottom:10 }}>
+                        <div style={{ fontSize:11,color:"#888",fontWeight:600,letterSpacing:1 }}>#{String(pokemon.dexNumber).padStart(3,"0")}</div>
+                        <div style={{ fontSize:24,fontWeight:800,color:"#fff",marginBottom:2,textTransform:"capitalize" }}>{pokemon.name.replace(/-/g," ")}</div>
+                        {pokemon.genus && <div style={{ fontSize:12,color:"#aaa",fontStyle:"italic",marginBottom:8 }}>{pokemon.genus}</div>}
+                        <div style={{ display:"flex",gap:6,flexWrap:"wrap",justifyContent:"center" }}>
+                          {pokemon.types.map(t => <TypeBadge key={t} type={t} />)}
+                        </div>
+                      </div>
+                      {/* Description */}
+                      <div style={{
+                        background:"rgba(255,255,255,0.07)", borderRadius:8,
+                        padding:"10px 12px", fontSize:13, lineHeight:1.6, color:"#ccc",
+                        borderLeft:`3px solid ${typeColors[pokemon.types[0]]||"#888"}`,
+                      }}>{pokemon.description}</div>
+                      {/* Speaker */}
+                      <div style={{ marginTop:10,minHeight:20,display:"flex",justifyContent:"center" }}>
+                        {speaking ? <SpeakingWaveform /> : audioOn ? (
+                          <button onClick={() => speakPokedex(pokemon)} style={{
+                            background:"none",border:"1px solid #00BFFF44",color:"#00BFFF",borderRadius:12,
+                            padding:"4px 12px",fontSize:11,cursor:"pointer",fontWeight:600,letterSpacing:0.5,
+                          }}>🔊 Replay Entry</button>
+                        ) : (
+                          <div style={{ fontSize:10, color:"#555", fontStyle:"italic" }}>Audio off — toggle on device to enable</div>
+                        )}
+                      </div>
+                      {/* Swipe hint */}
+                      <div style={{ textAlign:"center", marginTop:8, fontSize:10, color:"#555" }}>
+                        Tap <span style={{ color:"#FFD700" }}>Card Info</span> for rarity & value →
+                      </div>
                     </div>
-                  ) : stage === "result" && (
-                    <div style={{ marginTop:8, textAlign:"center", fontSize:10, color:"#555", fontStyle:"italic" }}>Loading card market data...</div>
                   )}
-                  {/* Speaker */}
-                  <div style={{ marginTop:10,minHeight:20,display:"flex",justifyContent:"center" }}>
-                    {speaking ? <SpeakingWaveform /> : audioOn ? (
-                      <button onClick={() => speakPokedex(pokemon)} style={{
-                        background:"none",border:"1px solid #00BFFF44",color:"#00BFFF",borderRadius:12,
-                        padding:"4px 12px",fontSize:11,cursor:"pointer",fontWeight:600,letterSpacing:0.5,
-                      }}>🔊 Replay Entry</button>
-                    ) : (
-                      <div style={{ fontSize:10, color:"#555", fontStyle:"italic" }}>Audio off — toggle on device to enable</div>
-                    )}
-                  </div>
+
+                  {/* CARD INFO TAB */}
+                  {resultTab === "card" && (
+                    <div style={{ padding:16, animation:"slideInRight 0.3s ease", minHeight:200 }}>
+                      {cardData ? (
+                        <div style={{ animation:"fadeIn 0.4s ease" }}>
+                          {/* Card header */}
+                          <div style={{ textAlign:"center", marginBottom:12 }}>
+                            <div style={{ fontSize:18, fontWeight:800, color:"#fff", textTransform:"capitalize", marginBottom:2 }}>
+                              {pokemon.name.replace(/-/g," ")}
+                            </div>
+                            {cardData.setName && (
+                              <div style={{ fontSize:11, color:"#aaa" }}>{cardData.setName}{cardData.cardNumber ? ` · #${cardData.cardNumber}` : ""}</div>
+                            )}
+                          </div>
+                          {/* Rarity & Price */}
+                          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
+                            <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"12px 10px", textAlign:"center" }}>
+                              <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:4, textTransform:"uppercase" }}>Rarity</div>
+                              <div style={{
+                                fontSize:15, fontWeight:700,
+                                color: cardData.rarity.includes("Rare") ? "#FFD700" : cardData.rarity.includes("Uncommon") ? "#C0C0C0" : cardData.rarity === "Common" ? "#CD7F32" : "#aaa",
+                              }}>
+                                {cardData.rarity.includes("Illustration") ? "★★★ " + cardData.rarity
+                                  : cardData.rarity === "Rare Holo" ? "★ Rare Holo"
+                                  : cardData.rarity.includes("Ultra") || cardData.rarity.includes("EX") || cardData.rarity.includes("GX") || cardData.rarity.includes(" V") ? "★★ " + cardData.rarity
+                                  : cardData.rarity.includes("VMAX") || cardData.rarity.includes("Secret") || cardData.rarity.includes("Rainbow") ? "★★★ " + cardData.rarity
+                                  : cardData.rarity}
+                              </div>
+                            </div>
+                            <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"12px 10px", textAlign:"center" }}>
+                              <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:4, textTransform:"uppercase" }}>Market Value</div>
+                              <div style={{
+                                fontSize:22, fontWeight:800,
+                                color: cardData.marketPrice >= 50 ? "#FFD700" : cardData.marketPrice >= 10 ? "#66BB6A" : cardData.marketPrice ? "#fff" : "#666",
+                              }}>
+                                {cardData.marketPrice ? `$${cardData.marketPrice.toFixed(2)}` : "N/A"}
+                              </div>
+                              <div style={{ fontSize:9, color:"#666", marginTop:2 }}>TCGplayer Market</div>
+                            </div>
+                          </div>
+                          {/* TCGplayer link */}
+                          {cardData.tcgplayerUrl && (
+                            <a href={cardData.tcgplayerUrl} target="_blank" rel="noopener noreferrer"
+                              style={{
+                                display:"block", textAlign:"center",
+                                background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
+                                color:"#fff", padding:"10px 16px", borderRadius:8,
+                                fontSize:13, fontWeight:700, letterSpacing:0.5,
+                                textDecoration:"none", boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
+                              }}>
+                              View on TCGplayer →
+                            </a>
+                          )}
+                        </div>
+                      ) : (
+                        /* Card data loading state */
+                        <div style={{ textAlign:"center", paddingTop:20 }}>
+                          {/* Card flip animation */}
+                          <div style={{ margin:"0 auto 16px", width:60, height:80, perspective:200 }}>
+                            <div style={{
+                              width:"100%", height:"100%", borderRadius:6,
+                              background:"linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)",
+                              animation:"cardSpin 2s ease-in-out infinite",
+                              boxShadow:"0 4px 12px rgba(0,0,0,0.3)",
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                            }}>
+                              <div style={{ fontSize:24 }}>🃏</div>
+                            </div>
+                          </div>
+                          <div style={{ fontSize:14, fontWeight:700, color:"#2a4a2a", marginBottom:4 }}>
+                            SEARCHING CARD DATABASE...
+                          </div>
+                          <div style={{ fontSize:11, color:"#4a6a4a", marginBottom:12 }}>
+                            Matching card to TCGplayer listings...
+                          </div>
+                          {/* Progress bar */}
+                          <div style={{ maxWidth:200, margin:"0 auto", height:5, background:"rgba(255,255,255,0.1)", borderRadius:3, overflow:"hidden" }}>
+                            <div style={{
+                              height:"100%", borderRadius:3,
+                              background:"linear-gradient(90deg, #FFD700, #FFA500)",
+                              width:"60%",
+                              animation:"progressPulse 1.5s ease-in-out infinite",
+                            }} />
+                          </div>
+                        </div>
+                      )}
+                      {/* Back hint */}
+                      <div style={{ textAlign:"center", marginTop:12, fontSize:10, color:"#555" }}>
+                        ← Tap <span style={{ color:"#00BFFF" }}>Pokédex</span> for entry details
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
