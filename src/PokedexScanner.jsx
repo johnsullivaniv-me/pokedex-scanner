@@ -152,59 +152,6 @@ export default function PokedexScanner() {
     };
   }, []);
 
-  // ─── TCG API fetch ───
-  const fetchCardData = useCallback(async (pokemonName, cardNumber = null, setCode = null) => {
-    try {
-      // Build the most specific query possible
-      let query = `name:"${pokemonName}"`;
-      if (cardNumber) {
-        const num = cardNumber.split("/")[0];
-        query += ` number:"${num}"`;
-      }
-      if (setCode) {
-        // Try matching set code/name
-        query += ` (set.id:"${setCode.toLowerCase()}" OR set.name:"${setCode}")`;
-      }
-
-      let res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(query)}&pageSize=5`);
-      let data = res.ok ? await res.json() : null;
-
-      // If specific query found nothing, fall back to just name + number
-      if (!data?.data?.length && (setCode || cardNumber)) {
-        let fallbackQuery = `name:"${pokemonName}"`;
-        if (cardNumber) fallbackQuery += ` number:"${cardNumber.split("/")[0]}"`;
-        res = await fetch(`https://api.pokemontcg.io/v2/cards?q=${encodeURIComponent(fallbackQuery)}&pageSize=10`);
-        data = res.ok ? await res.json() : null;
-      }
-
-      // Last resort: just name
-      if (!data?.data?.length) {
-        res = await fetch(`https://api.pokemontcg.io/v2/cards?q=name:"${encodeURIComponent(pokemonName)}"&orderBy=-tcgplayer.prices.holofoil.market&pageSize=5`);
-        data = res.ok ? await res.json() : null;
-      }
-
-      if (!data?.data?.length) return null;
-
-      // Pick best match — prefer exact card number match
-      let card = data.data[0];
-      if (cardNumber) {
-        const exactNum = cardNumber.split("/")[0];
-        const exact = data.data.find(c => c.number === exactNum);
-        if (exact) card = exact;
-      }
-
-      const prices = card.tcgplayer?.prices || {};
-      const priceSource = prices.holofoil || prices["1stEditionHolofoil"] || prices.reverseHolofoil || prices.normal || prices["1stEditionNormal"] || {};
-      return {
-        rarity: card.rarity || "Unknown",
-        marketPrice: priceSource.market || priceSource.mid || null,
-        tcgplayerUrl: card.tcgplayer?.url || null,
-        setName: card.set?.name || null,
-        cardNumber: card.number ? `${card.number}/${card.set?.printedTotal || "?"}` : null,
-      };
-    } catch { return null; }
-  }, []);
-
   // ─── Search (cached pokemon list) ───
   const searchTimeout = useRef(null);
   const pokemonListCache = useRef(null);
@@ -235,14 +182,12 @@ export default function PokedexScanner() {
         setScanStep({ phase: "found", pokemonName: entry.name, progress: 80 });
         setPokemon(entry);
         await new Promise(r => setTimeout(r, 600));
-        setScanStep({ phase: "market", pokemonName: entry.name, progress: 90 });
+        setScanStep(null);
         setStage("result"); speakPokedex(entry);
-        const displayName = name.split("-").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("-");
-        fetchCardData(displayName, cardNumber, setCode).then(cd => {
-          if (cd) setCardData(cd);
-          else fetchCardData(entry.name, cardNumber, setCode).then(cd2 => { if (cd2) setCardData(cd2); });
-          setScanStep(null);
-        });
+        // Store card details from scan (if available)
+        if (cardNumber || setCode) {
+          setCardData({ cardNumber, setCode });
+        }
       } else {
         setScanStep(null);
         setError(`Couldn't find "${name}" in the Pokédex.`); setStage("error");
@@ -251,7 +196,7 @@ export default function PokedexScanner() {
       setScanStep(null);
       setError("Network error fetching Pokédex data."); setStage("error");
     }
-  }, [fetchFromPokeAPI, speakPokedex, fetchCardData]);
+  }, [fetchFromPokeAPI, speakPokedex]);
 
   // ─── Camera ───
   const startCamera = useCallback(async () => {
@@ -559,7 +504,6 @@ export default function PokedexScanner() {
                       position:"relative",
                     }}>
                       💰 Card Info
-                      {!cardData && <span style={{ position:"absolute", top:6, right:"15%", width:6, height:6, borderRadius:"50%", background:"#FFDD44", animation:"pokedexPulse 1.5s infinite" }} />}
                     </button>
                   </div>
 
@@ -618,91 +562,84 @@ export default function PokedexScanner() {
                   {/* CARD INFO TAB */}
                   {resultTab === "card" && (
                     <div style={{ padding:16, animation:"slideInRight 0.3s ease", minHeight:200 }}>
-                      {cardData ? (
+                      {/* Card header */}
+                      <div style={{ textAlign:"center", marginBottom:16 }}>
+                        <div style={{ fontSize:20, fontWeight:800, color:"#fff", textTransform:"capitalize", marginBottom:4 }}>
+                          {pokemon.name.replace(/-/g," ")}
+                        </div>
+                        <div style={{ fontSize:11, color:"#888" }}>Card Details from Scan</div>
+                      </div>
+
+                      {cardData && (cardData.cardNumber || cardData.setCode) ? (
                         <div style={{ animation:"fadeIn 0.4s ease" }}>
-                          {/* Card header */}
-                          <div style={{ textAlign:"center", marginBottom:12 }}>
-                            <div style={{ fontSize:18, fontWeight:800, color:"#fff", textTransform:"capitalize", marginBottom:2 }}>
-                              {pokemon.name.replace(/-/g," ")}
-                            </div>
-                            {cardData.setName && (
-                              <div style={{ fontSize:11, color:"#aaa" }}>{cardData.setName}{cardData.cardNumber ? ` · #${cardData.cardNumber}` : ""}</div>
+                          {/* Scanned card details */}
+                          <div style={{
+                            background:"rgba(255,255,255,0.05)", borderRadius:10,
+                            padding:14, marginBottom:12,
+                          }}>
+                            {cardData.cardNumber && (
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, paddingBottom:10, borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+                                <div style={{ fontSize:10, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:0.5 }}>Card Number</div>
+                                <div style={{ fontSize:16, fontWeight:800, color:"#FFD700", letterSpacing:1 }}>{cardData.cardNumber}</div>
+                              </div>
+                            )}
+                            {cardData.setCode && (
+                              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                <div style={{ fontSize:10, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:0.5 }}>Set</div>
+                                <div style={{ fontSize:14, fontWeight:700, color:"#ccc", textTransform:"capitalize" }}>{cardData.setCode}</div>
+                              </div>
                             )}
                           </div>
-                          {/* Rarity & Price */}
-                          <div style={{ display:"flex", gap:8, marginBottom:12 }}>
-                            <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"12px 10px", textAlign:"center" }}>
-                              <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:4, textTransform:"uppercase" }}>Rarity</div>
-                              <div style={{
-                                fontSize:15, fontWeight:700,
-                                color: cardData.rarity.includes("Rare") ? "#FFD700" : cardData.rarity.includes("Uncommon") ? "#C0C0C0" : cardData.rarity === "Common" ? "#CD7F32" : "#aaa",
-                              }}>
-                                {cardData.rarity.includes("Illustration") ? "★★★ " + cardData.rarity
-                                  : cardData.rarity === "Rare Holo" ? "★ Rare Holo"
-                                  : cardData.rarity.includes("Ultra") || cardData.rarity.includes("EX") || cardData.rarity.includes("GX") || cardData.rarity.includes(" V") ? "★★ " + cardData.rarity
-                                  : cardData.rarity.includes("VMAX") || cardData.rarity.includes("Secret") || cardData.rarity.includes("Rainbow") ? "★★★ " + cardData.rarity
-                                  : cardData.rarity}
-                              </div>
-                            </div>
-                            <div style={{ flex:1, background:"rgba(255,255,255,0.05)", borderRadius:8, padding:"12px 10px", textAlign:"center" }}>
-                              <div style={{ fontSize:10, color:"#888", fontWeight:600, letterSpacing:0.5, marginBottom:4, textTransform:"uppercase" }}>Market Value</div>
-                              <div style={{
-                                fontSize:22, fontWeight:800,
-                                color: cardData.marketPrice >= 50 ? "#FFD700" : cardData.marketPrice >= 10 ? "#66BB6A" : cardData.marketPrice ? "#fff" : "#666",
-                              }}>
-                                {cardData.marketPrice ? `$${cardData.marketPrice.toFixed(2)}` : "N/A"}
-                              </div>
-                              <div style={{ fontSize:9, color:"#666", marginTop:2 }}>TCGplayer Market</div>
-                            </div>
+
+                          {/* Search tips */}
+                          <div style={{
+                            background:"rgba(255,255,255,0.03)", borderRadius:8,
+                            padding:"10px 12px", marginBottom:14, fontSize:11, color:"#777", lineHeight:1.6,
+                            borderLeft:"2px solid rgba(255,215,0,0.3)",
+                          }}>
+                            Search TCGplayer using the card details above to find exact pricing and listings for your card.
                           </div>
-                          {/* TCGplayer link */}
-                          {cardData.tcgplayerUrl && (
-                            <a href={cardData.tcgplayerUrl} target="_blank" rel="noopener noreferrer"
-                              style={{
-                                display:"block", textAlign:"center",
-                                background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
-                                color:"#fff", padding:"10px 16px", borderRadius:8,
-                                fontSize:13, fontWeight:700, letterSpacing:0.5,
-                                textDecoration:"none", boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
-                              }}>
-                              View on TCGplayer →
-                            </a>
-                          )}
+
+                          {/* TCGplayer search link */}
+                          <a
+                            href={`https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(pokemon.name.replace(/-/g, " "))}${cardData.setCode ? "&setName=" + encodeURIComponent(cardData.setCode) : ""}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{
+                              display:"block", textAlign:"center",
+                              background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
+                              color:"#fff", padding:"12px 16px", borderRadius:8,
+                              fontSize:13, fontWeight:700, letterSpacing:0.5,
+                              textDecoration:"none", boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
+                            }}>
+                            Search on TCGplayer →
+                          </a>
                         </div>
                       ) : (
-                        /* Card data loading state */
-                        <div style={{ textAlign:"center", paddingTop:20 }}>
-                          {/* Card flip animation */}
-                          <div style={{ margin:"0 auto 16px", width:60, height:80, perspective:200 }}>
-                            <div style={{
-                              width:"100%", height:"100%", borderRadius:6,
-                              background:"linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FFD700 100%)",
-                              animation:"cardSpin 2s ease-in-out infinite",
-                              boxShadow:"0 4px 12px rgba(0,0,0,0.3)",
-                              display:"flex", alignItems:"center", justifyContent:"center",
+                        /* No card data (searched by name, not scanned) */
+                        <div style={{ textAlign:"center", animation:"fadeIn 0.3s ease" }}>
+                          <div style={{ fontSize:40, marginBottom:12 }}>🃏</div>
+                          <div style={{ fontSize:13, color:"#aaa", lineHeight:1.6, marginBottom:16, maxWidth:240, margin:"0 auto 16px" }}>
+                            {cardData === null
+                              ? "Scan a physical card to see specific card details here."
+                              : "No card number or set detected. Try scanning with better lighting."}
+                          </div>
+                          {/* Generic TCGplayer search */}
+                          <a
+                            href={`https://www.tcgplayer.com/search/pokemon/product?q=${encodeURIComponent(pokemon.name.replace(/-/g, " "))}`}
+                            target="_blank" rel="noopener noreferrer"
+                            style={{
+                              display:"inline-block", textAlign:"center",
+                              background:"linear-gradient(180deg, #1a5c9e 0%, #0d3b6e 100%)",
+                              color:"#fff", padding:"10px 20px", borderRadius:8,
+                              fontSize:12, fontWeight:700, letterSpacing:0.5,
+                              textDecoration:"none", boxShadow:"0 2px 8px rgba(0,0,0,0.3)",
                             }}>
-                              <div style={{ fontSize:24 }}>🃏</div>
-                            </div>
-                          </div>
-                          <div style={{ fontSize:14, fontWeight:700, color:"#2a4a2a", marginBottom:4 }}>
-                            SEARCHING CARD DATABASE...
-                          </div>
-                          <div style={{ fontSize:11, color:"#4a6a4a", marginBottom:12 }}>
-                            Matching card to TCGplayer listings...
-                          </div>
-                          {/* Progress bar */}
-                          <div style={{ maxWidth:200, margin:"0 auto", height:5, background:"rgba(255,255,255,0.1)", borderRadius:3, overflow:"hidden" }}>
-                            <div style={{
-                              height:"100%", borderRadius:3,
-                              background:"linear-gradient(90deg, #FFD700, #FFA500)",
-                              width:"60%",
-                              animation:"progressPulse 1.5s ease-in-out infinite",
-                            }} />
-                          </div>
+                            Browse {pokemon.name.replace(/-/g," ")} on TCGplayer
+                          </a>
                         </div>
                       )}
                       {/* Back hint */}
-                      <div style={{ textAlign:"center", marginTop:12, fontSize:10, color:"#555" }}>
+                      <div style={{ textAlign:"center", marginTop:14, fontSize:10, color:"#555" }}>
                         ← Tap <span style={{ color:"#00BFFF" }}>Pokédex</span> for entry details
                       </div>
                     </div>
